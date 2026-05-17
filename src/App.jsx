@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { db, doc, setDoc, onSnapshot } from "./firebase";
 
 // ══════════════════════════════════════════════
 // EMAILS AUTORIZADOS
@@ -74,7 +75,7 @@ const BASE_MENU = {
 const formatPrecio = (n) => "$" + Number(n).toLocaleString("es-AR");
 
 // ══════════════════════════════════════════════
-// ADMIN STORE
+// ADMIN STORE — con Firebase Firestore
 // ══════════════════════════════════════════════
 function loadLS(k, fb) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch { return fb; } }
 function saveLS(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
@@ -91,12 +92,33 @@ function applyOverrides(base, ov) {
 }
 function getByPath(obj, path) { return path.split(".").reduce((c, k) => (c == null ? undefined : c[k]), obj); }
 
+const OVERRIDES_REF = doc(db, "menu", "overrides");
+
+function fsWrite(ov) {
+  setDoc(OVERRIDES_REF, { data: JSON.stringify(ov) }).catch(console.error);
+}
+
 function useAdminStore() {
-  const [overrides, setOv] = useState(() => loadLS("pv_overrides_v2", {}));
+  // Cargamos overrides desde cache local para render inmediato
+  const [overrides, setOv] = useState(() => loadLS("pv_overrides_cache", {}));
   const [images, setImgs] = useState(() => loadLS("pv_images_v2", {}));
   const [session, setSess] = useState(() => loadLS("pv_session_v2", null));
+
+  // Suscripción en tiempo real a Firestore
+  useEffect(() => {
+    const unsub = onSnapshot(OVERRIDES_REF, (snap) => {
+      try {
+        const data = snap.exists() ? JSON.parse(snap.data()?.data || "{}") : {};
+        setOv(data);
+        saveLS("pv_overrides_cache", data);
+      } catch(e) { console.error("Firestore parse error:", e); }
+    }, (err) => console.error("Firestore error:", err));
+    return () => unsub();
+  }, []);
+
   const menu = applyOverrides(BASE_MENU, overrides);
   const isAdmin = !!session;
+
   const login = (email) => {
     if (ADMIN_EMAILS.includes(email.trim().toLowerCase())) {
       const s = { email: email.trim().toLowerCase() };
@@ -105,11 +127,27 @@ function useAdminStore() {
     return false;
   };
   const logout = () => { setSess(null); saveLS("pv_session_v2", null); };
-  const setOverride = (path, value) => setOv(prev => { const n = { ...prev, [path]: value }; saveLS("pv_overrides_v2", n); return n; });
-  const clearOverride = (path) => setOv(prev => { const n = { ...prev }; delete n[path]; saveLS("pv_overrides_v2", n); return n; });
+
+  const setOverride = (path, value) => setOv(prev => {
+    const n = { ...prev, [path]: value };
+    saveLS("pv_overrides_cache", n);
+    fsWrite(n);
+    return n;
+  });
+  const clearOverride = (path) => setOv(prev => {
+    const n = { ...prev }; delete n[path];
+    saveLS("pv_overrides_cache", n);
+    fsWrite(n);
+    return n;
+  });
   const setImage = (id, url) => setImgs(prev => { const n = { ...prev, [id]: url }; saveLS("pv_images_v2", n); return n; });
   const clearImage = (id) => setImgs(prev => { const n = { ...prev }; delete n[id]; saveLS("pv_images_v2", n); return n; });
-  const resetAll = () => { setOv({}); setImgs({}); saveLS("pv_overrides_v2", {}); saveLS("pv_images_v2", {}); };
+  const resetAll = () => {
+    setOv({}); setImgs({});
+    saveLS("pv_overrides_cache", {}); saveLS("pv_images_v2", {});
+    fsWrite({});
+  };
+
   return { menu, overrides, images, session, isAdmin, login, logout, setOverride, clearOverride, setImage, clearImage, resetAll };
 }
 
@@ -139,32 +177,21 @@ const CSS = `
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: 'DM Sans', system-ui, sans-serif; background: oklch(0.94 0.025 60); min-height: 100vh; -webkit-font-smoothing: antialiased; }
 
-/* Stage */
 .pv-stage { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
-
-/* Device frame */
 .pv-device { width: 390px; height: 844px; border-radius: 48px; overflow: hidden; position: relative; background: var(--crema); box-shadow: 0 40px 80px rgba(0,0,0,0.18), 0 0 0 1px rgba(0,0,0,0.12); }
 .pv-device-island { position: absolute; top: 11px; left: 50%; transform: translateX(-50%); width: 126px; height: 37px; border-radius: 24px; background: #000; z-index: 50; }
 .pv-device-home { position: absolute; bottom: 0; left: 0; right: 0; height: 34px; display: flex; justify-content: center; align-items: flex-end; padding-bottom: 8px; pointer-events: none; z-index: 60; }
 .pv-device-home-bar { width: 139px; height: 5px; border-radius: 100px; background: rgba(0,0,0,0.2); }
-
-/* App shell */
 .pv-app { position: absolute; inset: 0; background: var(--crema); color: var(--tierra); display: flex; flex-direction: column; overflow: hidden; font-family: 'DM Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
 .pv-app * { box-sizing: border-box; font-family: inherit; -webkit-font-smoothing: antialiased; }
 .pv-app * { transition: background-color .18s ease, transform .18s ease, opacity .18s ease, border-color .18s ease; }
-
-/* Header */
 .pv-header { padding: 56px 18px 0; flex-shrink: 0; }
 .pv-header-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .pv-back { width: 38px; height: 38px; border-radius: 999px; background: var(--hueso); border: 1px solid var(--crema-line); display: flex; align-items: center; justify-content: center; cursor: pointer; appearance: none; }
 .pv-header-title { font-family: 'Instrument Serif', Georgia, serif; font-size: 18px; letter-spacing: 0.01em; color: var(--tierra); }
-
-/* Body */
 .pv-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 14px var(--pv-pad-screen) 120px; scrollbar-width: none; }
 .pv-body::-webkit-scrollbar { display: none; }
 .pv-body-with-cart { padding-bottom: 140px; }
-
-/* Typography */
 .pv-serif { font-family: 'Instrument Serif', Georgia, serif; font-weight: 400; }
 .pv-eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.16em; color: var(--tierra-soft); font-weight: 500; }
 .pv-h1 { font-family: 'Instrument Serif', Georgia, serif; font-size: 44px; line-height: 1.02; color: var(--tierra); letter-spacing: -0.01em; }
@@ -172,71 +199,44 @@ body { font-family: 'DM Sans', system-ui, sans-serif; background: oklch(0.94 0.0
 .pv-h3 { font-family: 'Instrument Serif', Georgia, serif; font-size: 22px; line-height: 1.1; color: var(--tierra); }
 .pv-meta { font-size: 13px; color: var(--tierra-soft); line-height: 1.4; }
 .pv-body-text { font-size: 14px; color: var(--tierra); line-height: 1.45; }
-
-/* Buttons */
 .pv-btn { appearance: none; border: 0; cursor: pointer; height: 52px; padding: 0 22px; border-radius: 999px; background: var(--terracota); color: var(--hueso); font-size: 15px; font-weight: 600; letter-spacing: 0.005em; display: inline-flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 1px 0 rgba(255,255,255,0.5) inset, 0 8px 22px -8px oklch(0.55 0.12 40 / 0.5); }
 .pv-btn:hover { background: var(--terracota-deep); }
 .pv-btn-full { width: 100%; }
 .pv-btn-sm { height: 38px; padding: 0 14px; font-size: 13px; }
-.pv-btn-ghost { background: transparent; color: var(--terracota); border: 1px solid var(--terracota); box-shadow: none; }
-
-/* Cards */
 .pv-card { background: var(--hueso); border: 1px solid var(--crema-line); border-radius: 20px; padding: var(--pv-pad-card); }
 .pv-card-tap { cursor: pointer; }
 .pv-card-tap:hover { border-color: var(--terracota-soft); }
 .pv-card-tap:active { transform: scale(0.985); }
-
-/* Imagen placeholder */
 .pv-img { background: repeating-linear-gradient(135deg, oklch(0.93 0.04 55) 0 12px, oklch(0.90 0.045 50) 12px 24px); border-radius: 14px; display: flex; align-items: center; justify-content: center; color: oklch(0.40 0.05 50); font-size: 10px; letter-spacing: 0.05em; text-transform: uppercase; position: relative; overflow: hidden; }
 .pv-img::after { content: ''; position: absolute; inset: 0; border: 1px dashed oklch(0.55 0.06 50 / 0.4); border-radius: 14px; pointer-events: none; }
 .pv-img-veg { background: repeating-linear-gradient(135deg, oklch(0.86 0.045 125) 0 12px, oklch(0.83 0.05 125) 12px 24px); color: oklch(0.36 0.05 125); }
 .pv-img-veg::after { border-color: oklch(0.5 0.07 125 / 0.4); }
-
-/* Tags */
 .pv-tag { display: inline-block; font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--crema-deep); color: var(--tierra); letter-spacing: 0.02em; }
 .pv-tag-veg { background: var(--verde-soft); color: oklch(0.32 0.07 125); }
-
-/* Tabs */
 .pv-tabs { display: flex; gap: 6px; background: var(--crema-deep); border-radius: 999px; padding: 4px; }
 .pv-tab { flex: 1; height: 38px; border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 500; color: var(--tierra-soft); cursor: pointer; white-space: nowrap; }
 .pv-tab[aria-selected="true"] { background: var(--hueso); color: var(--tierra); box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-
-/* Cart bar */
 .pv-cart-bar { position: absolute; left: 12px; right: 12px; bottom: 28px; background: var(--tierra); color: var(--hueso); border-radius: 18px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 12px 30px -10px oklch(0.25 0.04 50 / 0.4); z-index: 20; }
 .pv-cart-bar small { font-size: 11px; opacity: 0.7; }
-
-/* Lista / grid */
 .pv-list-grid { display: grid; gap: var(--pv-gap-list); grid-template-columns: 1fr; }
 .pv-dish-list { display: grid; grid-template-columns: 80px 1fr; gap: 12px; align-items: center; }
 .pv-dish-list .pv-img { width: 80px; height: 80px; }
-
-/* Form */
 .pv-input { appearance: none; width: 100%; height: 48px; padding: 0 16px; border-radius: 14px; background: var(--hueso); border: 1px solid var(--crema-line); font-size: 15px; color: var(--tierra); font-family: inherit; }
 .pv-input:focus { outline: none; border-color: var(--terracota); }
 .pv-label { font-size: 12px; color: var(--tierra-soft); margin-bottom: 6px; display: block; font-weight: 500; letter-spacing: 0.01em; }
 .pv-field { margin-bottom: 14px; }
-
-/* Chip */
 .pv-chip { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; background: var(--hueso); border: 1px solid var(--crema-line); color: var(--tierra); font-size: 13px; cursor: pointer; user-select: none; appearance: none; font-family: inherit; }
 .pv-chip[aria-pressed="true"] { background: var(--terracota); color: var(--hueso); border-color: var(--terracota); }
 .pv-chip-veg[aria-pressed="true"] { background: var(--verde); border-color: var(--verde); }
-
-/* Stepper */
 .pv-stepper { display: inline-flex; align-items: center; gap: 12px; background: var(--crema-deep); padding: 4px; border-radius: 999px; }
 .pv-stepper button { appearance: none; border: 0; width: 34px; height: 34px; border-radius: 999px; background: var(--hueso); color: var(--tierra); font-size: 18px; cursor: pointer; }
 .pv-stepper-val { min-width: 18px; text-align: center; font-weight: 600; font-size: 15px; }
-
-/* Bowl */
 .pv-bowl-wrap { position: relative; width: 220px; height: 220px; margin: 12px auto 4px; }
 .pv-bowl-bg { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 35% 30%, oklch(0.99 0.005 80) 0%, oklch(0.93 0.025 75) 60%, oklch(0.85 0.035 65) 100%); box-shadow: inset 0 -20px 40px oklch(0.7 0.05 50 / 0.2), 0 20px 40px -15px oklch(0.6 0.08 50 / 0.4); overflow: hidden; }
 .pv-bowl-fill { position: absolute; inset: 8%; border-radius: 50%; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; padding: 14px; overflow: hidden; }
 .pv-bowl-dot { width: 18px; height: 18px; border-radius: 50%; background: var(--verde); opacity: 0.85; }
 .pv-bowl-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: 'Instrument Serif', serif; font-size: 18px; color: var(--tierra-soft); text-align: center; padding: 0 40px; line-height: 1.2; }
-
-/* Confirmación */
 .pv-checkmark { width: 88px; height: 88px; border-radius: 50%; background: var(--verde); color: var(--hueso); display: flex; align-items: center; justify-content: center; margin: 32px auto 24px; box-shadow: 0 20px 40px -15px oklch(0.5 0.1 130 / 0.5); }
-
-/* ══ ADMIN ══ */
 .adm-fab { position: absolute; right: 16px; bottom: 48px; z-index: 30; width: 42px; height: 42px; border-radius: 50%; background: var(--tierra); border: none; color: rgba(255,255,255,0.55); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 16px rgba(0,0,0,0.25); transition: all .2s; appearance: none; }
 .adm-fab:hover { background: var(--terracota); color: white; transform: scale(1.08); }
 .adm-tabs { display: flex; gap: 5px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 18px; scrollbar-width: none; }
@@ -289,9 +289,6 @@ const Icon = {
   lock: () => <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><rect x="4" y="10" width="16" height="11" rx="2" stroke="var(--terracota)" strokeWidth="2"/><path d="M8 10V7a4 4 0 018 0v3" stroke="var(--terracota)" strokeWidth="2"/></svg>,
 };
 
-// ══════════════════════════════════════════════
-// IMAGEN con soporte de override
-// ══════════════════════════════════════════════
 function Img({ id, veg, style, images }) {
   const src = images?.[id];
   const cls = `pv-img${veg ? " pv-img-veg" : ""}`;
@@ -299,9 +296,6 @@ function Img({ id, veg, style, images }) {
   return <div className={cls} style={style}>foto</div>;
 }
 
-// ══════════════════════════════════════════════
-// HEADER & CARTBAR reutilizables
-// ══════════════════════════════════════════════
 function Header({ onBack, title, right }) {
   return (
     <div className="pv-header">
@@ -329,10 +323,6 @@ function CartBar({ cart, onTap, label = "Ver carrito" }) {
   );
 }
 
-// ══════════════════════════════════════════════
-// SCREENS
-// ══════════════════════════════════════════════
-
 function HomeScreen({ go, cart, D, isAdmin, images }) {
   return (
     <>
@@ -351,7 +341,6 @@ function HomeScreen({ go, cart, D, isAdmin, images }) {
           </div>
           <div className="pv-body-text" style={{ marginTop: 12, maxWidth: 320 }}>{D.home.desc}</div>
         </div>
-
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {[1, 2, 3].map((n) => {
             const op = D.opciones[n];
@@ -380,7 +369,6 @@ function HomeScreen({ go, cart, D, isAdmin, images }) {
             );
           })}
         </div>
-
         <div style={{ marginTop: 26, padding: 16, borderRadius: 16, background: "var(--terracota-soft)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, color: "oklch(0.36 0.08 40)" }}><Icon.clock /><span style={{ fontSize: 12, fontWeight: 500 }}>{D.home.hours}</span></div>
           <div style={{ fontSize: 12, color: "oklch(0.36 0.08 40)", marginTop: 6, opacity: 0.85 }}>{D.home.delivery}</div>
@@ -688,16 +676,13 @@ function ConfirmScreen({ state, go, setCart }) {
   );
 }
 
-// ══════════════════════════════════════════════
-// ADMIN: LOGIN
-// ══════════════════════════════════════════════
 function LoginScreen({ go, admin }) {
   const [email, setEmail] = useState("");
   const [err, setErr] = useState("");
   const submit = () => {
     if (!email.trim()) { setErr("Ingresá tu email."); return; }
     if (admin.login(email)) { setErr(""); go({ screen: "admin" }); }
-    else setErr("Email no autorizado. Solo los administradores de Pachama pueden ingresar.");
+    else setErr("Email no autorizado.");
   };
   return (
     <>
@@ -706,7 +691,7 @@ function LoginScreen({ go, admin }) {
         <div style={{ flex: 1 }} />
         <div style={{ textAlign: "center", marginBottom: 20 }}><Icon.lock /></div>
         <div className="pv-h2" style={{ textAlign: "center", marginBottom: 8 }}>Iniciar sesión</div>
-        <div className="pv-meta" style={{ textAlign: "center", marginBottom: 28 }}>Acceso restringido. Solo los administradores autorizados pueden editar el menú.</div>
+        <div className="pv-meta" style={{ textAlign: "center", marginBottom: 28 }}>Acceso restringido.</div>
         <div className="pv-field">
           <label className="pv-label">Email</label>
           <input className="pv-input" type="email" autoComplete="email" placeholder="tu@email.com" value={email} style={err ? { borderColor: "var(--warn)" } : {}} onChange={(e) => { setEmail(e.target.value); setErr(""); }} onKeyDown={(e) => e.key === "Enter" && submit()} />
@@ -719,9 +704,6 @@ function LoginScreen({ go, admin }) {
   );
 }
 
-// ══════════════════════════════════════════════
-// ADMIN: PANEL
-// ══════════════════════════════════════════════
 function AdminScreen({ go, admin, D }) {
   const [tab, setTab] = useState("general");
   useEffect(() => { if (!admin.isAdmin) go({ screen: "login" }); }, [admin.isAdmin]);
@@ -750,7 +732,7 @@ function AdminScreen({ go, admin, D }) {
         {tab === "arma" && <AdminArma admin={admin} D={D} />}
         <div className="adm-danger">
           <div className="adm-danger-title">Zona de peligro</div>
-          <div className="adm-danger-sub">Restablece todos los textos, precios e imágenes a los valores originales.</div>
+          <div className="adm-danger-sub">Restablece todos los textos, precios e imágenes.</div>
           <button className="adm-danger-btn" onClick={() => { if (window.confirm("¿Restablecer todo?")) admin.resetAll(); }}>Restablecer todo</button>
         </div>
       </div>
@@ -758,7 +740,6 @@ function AdminScreen({ go, admin, D }) {
   );
 }
 
-// ── Admin field components ─────────────────────
 function AF({ label, path, multi, admin, D }) {
   const val = getByPath(D, path) ?? "";
   const isOv = path in admin.overrides;
@@ -829,17 +810,15 @@ function LF({ label, path, admin, D }) {
     </div>
   );
 }
-
 function ACard({ title, children }) {
   return <div style={{ marginBottom: 20 }}>{title && <div className="pv-h3" style={{ fontSize: 16, marginBottom: 10 }}>{title}</div>}<div className="adm-card">{children}</div></div>;
 }
-
 function AdminGeneral({ admin, D }) {
   return <>
     <ACard title="Pantalla principal"><AF label="Título — línea 1" path="home.titleL1" admin={admin} D={D} /><AF label="Título — línea 2 (cursiva)" path="home.titleL2" admin={admin} D={D} /><AF label="Título — línea 3" path="home.titleL3" admin={admin} D={D} /><AF label="Descripción" path="home.desc" multi admin={admin} D={D} /></ACard>
     <ACard title="Fecha del día"><AF label="Día de la semana" path="fecha.dia" admin={admin} D={D} /><AF label="Número" path="fecha.numero" admin={admin} D={D} /><AF label="Mes" path="fecha.mes" admin={admin} D={D} /></ACard>
     <ACard title="Entrega"><AF label="Zona de entrega" path="home.delivery" multi admin={admin} D={D} /><AF label="Horario" path="home.hours" admin={admin} D={D} /></ACard>
-    <ACard title="WhatsApp"><div style={{ fontSize: 10, color: "var(--tierra-soft)", lineHeight: 1.5 }}>Incluí código de país (ej: +54 9 297…).</div><AF label="Número de WhatsApp" path="home.whatsapp" admin={admin} D={D} /></ACard>
+    <ACard title="WhatsApp"><AF label="Número de WhatsApp" path="home.whatsapp" admin={admin} D={D} /></ACard>
   </>;
 }
 function AdminOpciones({ admin, D }) {
@@ -905,9 +884,7 @@ export default function App() {
   const [state, setState] = useState({ screen: "home" });
   const [cart, setCart] = useState([]);
   const go = (next) => setState((s) => ({ ...s, ...next }));
-
   const shared = { go, cart, setCart, D, admin, images: admin.images, isAdmin: admin.isAdmin };
-
   const screens = {
     home: <HomeScreen {...shared} />,
     menu: <MenuScreen {...shared} state={state} />,
@@ -919,7 +896,6 @@ export default function App() {
     login: <LoginScreen {...shared} />,
     admin: <AdminScreen {...shared} />,
   };
-
   return (
     <>
       <style>{CSS}</style>
