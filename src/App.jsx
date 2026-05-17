@@ -836,6 +836,7 @@ function AdminPlatos({ admin, D }) {
           <AF label="Nombre" path={`platos.${g.cat}.${g.op}.${idx}.nombre`} admin={admin} D={D} />
           <AF label="Descripción" path={`platos.${g.cat}.${g.op}.${idx}.desc`} multi admin={admin} D={D} />
           <NF label="Precio" path={`platos.${g.cat}.${g.op}.${idx}.precio`} admin={admin} D={D} />
+          <TF label="Marcar como agotado" path={`platos.${g.cat}.${g.op}.${idx}.agotado`} admin={admin} D={D} />
           <div style={{ height: 1, background: "var(--crema-line)" }} />
           <TF label="Mostrar complementarios" path={`platos.${g.cat}.${g.op}.${idx}.complementarioVisible`} admin={admin} D={D} />
           <LF label="Complementarios" path={`platos.${g.cat}.${g.op}.${idx}.complementarios`} admin={admin} D={D} />
